@@ -1,0 +1,57 @@
+# Kernel is NOT part of the workspace — it is no_std + nightly only.
+# Build: cd kernel && cargo +nightly build --release
+
+[package]
+name        = "nexus-kernel"
+version     = "0.1.0"
+edition     = "2021"
+
+# The kernel is a standalone binary (not a library).
+[[bin]]
+name = "nexus-kernel"
+path = "src/main.rs"
+
+[dependencies]
+# Spinlocks — no OS primitives needed, no_std compatible
+spin           = { version = "0.9", features = ["once", "lazy"] }
+
+# Lazy static initialization in no_std context
+lazy_static    = { version = "1.4", features = ["spin_no_std"] }
+
+# Bit manipulation helpers
+bitflags       = "2.4"
+
+# Volatile reads/writes — prevents compiler from optimising away MMIO
+volatile       = "0.4"
+
+# x86_64 hardware abstractions (ports, page tables, GDT, IDT, TSS)
+x86_64         = "0.14"
+
+# Linked-list heap allocator — works in no_std
+linked_list_allocator = "0.10"
+
+# Minimal logging facade (no_std)
+log            = { version = "0.4", default-features = false }
+
+# Limine native boot protocol — safe Rust request/response bindings.
+# Needed because Multiboot2's framebuffer address isn't guaranteed to stay
+# backed by real VRAM after ExitBootServices on real hardware, unlike
+# Limine's own protocol, which explicitly guarantees this.
+limine         = "0.6"
+
+[profile.release]
+opt-level     = "z"
+lto           = true
+codegen-units = 1
+panic         = "abort"
+# Keep debug symbols for kernel panic backtraces
+strip         = false
+
+[build-dependencies]
+cc = "1.0"   # used by build.rs to assemble boot.s
+
+[profile.dev]
+opt-level = 0
+debug     = true
+panic     = "abort"
+[workspace]

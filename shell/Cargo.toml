@@ -1,0 +1,23 @@
+[package]
+name        = "nexus-shell"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+
+[[bin]]
+name = "nsh"
+path = "src/main.rs"
+
+[dependencies]
+ai_engine             = { path = "../ai_engine" }
+tokio.workspace       = true
+anyhow.workspace      = true
+thiserror.workspace   = true
+log.workspace         = true
+env_logger.workspace  = true
+parking_lot.workspace = true
+serde.workspace       = true
+serde_json.workspace  = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

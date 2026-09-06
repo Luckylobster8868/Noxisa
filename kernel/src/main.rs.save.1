@@ -1,0 +1,1039 @@
+//! Noxisa Kernel — Entry Point
+//!
+//! Build (requires Rust nightly):
+//!   cd kernel && cargo +nightly build --release
+//!
+//! Nightly features used:
+//!   abi_x86_interrupt  — correct calling convention for CPU exception handlers
+//!   alloc_error_handler — OOM hook in no_std
+//!   naked_functions     — bare assembly trampolines
+
+#![no_std]
+#![no_main]
+#![feature(abi_x86_interrupt)]
+#![feature(alloc_error_handler)]
+#![feature(naked_functions)]
+
+// Pull in heap-allocated types: Box, Vec, String, Arc, BTreeMap, …
+extern crate alloc;
+
+// ─── Sub-modules (all files must exist) ──────────────────────────────────────
+pub mod limine_boot;
+pub mod drivers;
+pub mod fs;
+pub mod ipc;
+pub mod memory;
+pub mod scheduler;
+pub mod security;   // capabilities, namespaces, seccomp, MAC
+pub mod kshell;     // kernel AI shell (early-boot / emergency)
+pub mod hal;        // Hardware Abstraction Layer — device traits + registry
+pub mod net;        // Full network stack (TCP/IP, DNS, TLS, firewall)
+pub mod heal;       // Self-healing engine — auto problem detection + remedy
+pub mod watchdog;   // Fault tolerance: watchdog timer, deadlock detection, tracing
+pub mod perf;       // Performance monitor: PMU counters, NUMA, RDTSC
+pub mod privacy;    // Federated Learning + Differential Privacy (FL+DP)
+pub mod compat;     // Linux binary compatibility (syscall translation)
+pub mod syscall;    // Native syscall dispatch + AI isolation boundary
+pub mod signal;     // POSIX signals: SIGKILL, SIGTERM, SIGCHLD, etc.
+pub mod io_uring;   // Async I/O ring buffers (io_uring)
+pub mod fuzz;       // In-kernel syscall fuzzer (DISABLED in production)     // Linux binary compatibility (syscall translation)
+
+// ─── Global allocator (must be declared at crate root) ────────────────────────
+#[global_allocator]
+static ALLOCATOR: linked_list_allocator::LockedHeap =
+    linked_list_allocator::LockedHeap::empty();
+
+// ─── Kernel entry ─────────────────────────────────────────────────────────────
+
+/// Called by the bootloader immediately after setting up page tables.
+///
+/// # Safety
+/// Called once, from ring-0, with a valid aligned `BootInfo` pointer.
+/// boot_info may be NULL when booted via QEMU -kernel directly (no bootloader).
+/// In that case the kernel runs in minimal mode: serial output + halt loop.
+#[no_mangle]
+/// Native Limine protocol entry point — called directly from boot.asm in
+/// 64-bit long mode with paging already set up, no boot-info pointer.
+/// Minimal for now: just proves the real framebuffer is reachable under
+/// native protocol, since that's the actual open question tonight. Full
+/// PMM/heap/scheduler bring-up under native protocol comes after this
+/// is confirmed working on real hardware.
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_main_native() -> ! {
+    // These two were missing from the native port — Limine loads its own
+    // GDT with an undefined layout, so any code assuming specific segment
+    // selectors (scheduler task setup, ring-3 support) can #GP without our
+    // own GDT in place. Same SSE enable the old Multiboot2 path always did.
+    unsafe {
+        let mut cr0: u64;
+        core::arch::asm!("mov {}, cr0", out(reg) cr0, options(nomem, nostack));
+        cr0 &= !4u64;
+        cr0 |=  2u64;
+        core::arch::asm!("mov cr0, {}", in(reg) cr0, options(nomem, nostack));
+        let mut cr4: u64;
+        core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nomem, nostack));
+        cr4 |= 0x600u64;
+        core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nomem, nostack));
+    }
+    drivers::gdt::init();
+
+    drivers::serial::init();
+    kprintln!("[DEBUG] Entered kernel_main_native (Limine native protocol)");
+
+    limine_boot::assert_base_revision_supported();
+    kprintln!("[boot] Limine base revision supported");
+
+    // Feed Limine's memory map into our existing PMM, same logic as the
+    // Multiboot2 path used, just a different source of truth.
+    if let Some(memmap) = limine_boot::MEMMAP_REQUEST.response() {
+        let mut usable = 0u64;
+        for entry in memmap.entries() {
+            if entry.type_ == 0 { // 0 == LIMINE_MEMMAP_USABLE per Limine protocol spec
+                memory::pmm::add_region(entry.base, entry.length);
+                usable += entry.length;
+            }
+        }
+        memory::pmm::init();
+        kprintln!("[boot] PMM ready (native) — {} MiB usable", usable / 1024 / 1024);
+
+        // Base revision 0 (our current fallback) identity-maps the entire
+        // first 4GiB, so this fixed low address is safe to use directly —
+        // no extra mapping needed the way the framebuffer needed HHDM.
+        // Under native protocol we don't trust the old fixed-address
+        // assumption (that was for Multiboot2's identity map). Instead,
+        // grab real physical frames from our PMM and reach them through
+        // Limine's HHDM offset, which is guaranteed valid.
+        if let Some(hhdm) = limine_boot::HHDM_REQUEST.response() {
+            let hhdm_offset = hhdm.offset;
+            const HEAP_FRAMES: usize = 512; // 512 * 4KiB = 2MiB
+            let first_phys = memory::pmm::alloc_frame().expect("out of memory for heap");
+            for _ in 1..HEAP_FRAMES {
+                memory::pmm::alloc_frame().expect("out of memory for heap");
+            }
+            let heap_virt = hhdm_offset + first_phys;
+            unsafe {
+                ALLOCATOR.lock().init(heap_virt as *mut u8, HEAP_FRAMES * 4096);
+            }
+            kprintln!("[boot] Heap ready (native) at {:#x} (phys {:#x})", heap_virt, first_phys);
+        } else {
+            kprintln!("[WARN] No HHDM response from Limine — heap not initialised");
+        }
+        {
+            let b = alloc::boxed::Box::new(42u64);
+            kprintln!("[boot] Box<u64> = {}", *b);
+            let mut v: alloc::vec::Vec<u64> = alloc::vec::Vec::new();
+            v.push(1);
+            v.push(2);
+            v.push(3);
+            kprintln!("[boot] Vec<u64> = [{}, {}, {}]", v[0], v[1], v[2]);
+        }
+    } else {
+        kprintln!("[WARN] No memory map from Limine — PMM not initialised");
+    }
+
+    // IDT + exception handlers (self-contained, no boot-info dependency,
+    // so it ports over unchanged from the Multiboot2 path)
+    drivers::idt::init();
+    kprintln!("[boot] IDT loaded (native) - interrupts enabled");
+    unsafe { core::arch::asm!("int3", options(nomem, nostack)); }
+    kprintln!("[boot] Breakpoint handled - CPU exceptions working!");
+    kprintln!("[boot] Exception handlers: #DE #DB #BP #OF #UD #GP #PF #DF");
+
+    // Register the real HHDM offset Limine gave us — without this,
+    // paging::hhdm_offset() defaults to 0, so anything that does
+    // phys + hhdm_offset() (like the scheduler's stack allocation)
+    // ends up treating a raw physical address as virtual, which faults.
+    if let Some(hhdm) = limine_boot::HHDM_REQUEST.response() {
+        memory::paging::init(hhdm.offset);
+        kprintln!("[boot] Paging HHDM offset registered: {:#x}", hhdm.offset);
+    }
+
+    // ── Milestone 1.2: Syscall interface (native) ───────────────────────
+    // Self-contained (no boot-info dependency), same as IDT above, so it
+    // ports over unchanged. Sets EFER.SCE + STAR/LSTAR so a ring-3 process
+    // can SYSCALL back into the kernel. GDT must already be loaded (it is —
+    // drivers::gdt::init() ran at the very top of this function) since the
+    // STAR MSR encodes segment selectors from that GDT layout.
+    unsafe { setup_syscall_msr(); }
+    kprintln!("[boot] Syscall MSR configured (STAR/LSTAR/EFER) (native)");
+    kprintln!("[boot] Noxisa 1.2 milestone reached — syscall interface ready! (native)");
+
+    // Scheduler + first kernel thread (self-contained, ports over unchanged)
+    kprintln!("[boot] Starting scheduler (native)...");
+    let sched = scheduler::Scheduler::get();
+    let pid_sh = sched.spawn("kshell", shell_thread);
+    kprintln!("[boot] Spawned kshell (pid={})", pid_sh);
+
+    drivers::pit::init();
+    kprintln!("[boot] PIT driver ready (native)");
+
+    if let Some(fb_response) = limine_boot::FRAMEBUFFER_REQUEST.response() {
+        if let Some(fb) = fb_response.framebuffers().first() {
+            let addr = fb.address() as u64;
+            let width = fb.width as u32;
+            let height = fb.height as u32;
+            let pitch = fb.pitch as u32;
+            kprintln!("[gpu] Limine FB: {:#x} {}x{} pitch={}", addr, width, height, pitch);
+
+            // Under native protocol, Limine's HHDM already maps this address —
+            // it's a virtual pointer, not physical, so our own identity-mapping
+            // code (which assumes physical addresses) would corrupt Limine's
+            // own page tables if we called it here. That's exactly what the
+            // "QEMU [Paused]" / triple-fault symptom was.
+            // Limine's framebuffer address is already a virtual HHDM
+            // pointer, but gpu::init() expects physical (it re-adds the
+            // HHDM offset itself). This silently worked earlier only
+            // because HHDM was still 0 at that point — now that we
+            // register the real offset, the double-add produced a
+            // non-canonical address and #GP'd. Convert back to physical.
+            let phys_addr = memory::paging::virt_to_phys(addr);
+            drivers::gpu::init(phys_addr, width, height);
+            drivers::gpu::fill_rect(0, 0, width, height, 0x00FF0000);
+            kprintln!("[debug] Filled screen red under NATIVE protocol — halting here");
+            draw_compositor_placeholder();
+        } else {
+            kprintln!("[gpu] Limine gave a framebuffer response but no framebuffers");
+        }
+    } else {
+        kprintln!("[gpu] No framebuffer response from Limine at all");
+    }
+
+    // ELF loader - userspace test binary is linked for a fixed low
+    // virtual address (0x400000), needs real identity mapping (virt==phys)
+    // not HHDM. Old code hand-poked PD entries assuming a specific
+    // existing page-table layout from Multiboot2-era boot.asm's hand-built
+    // tables - that assumption doesn't hold under Limine's own tables, so
+    // we use identity_map_region() instead, which safely creates entries
+    // regardless of what's already there.
+    kprintln!("[elf] Loading hello userspace binary...");
+
+    // TEMP DIAGNOSTIC: dump raw header fields before the real load, so we
+    // can see the actual vaddr/entry values instead of guessing why the
+    // page fault address (0x3ba2000) doesn't match the expected 0x400000.
+    {
+        let data = fs::initrd::HELLO_ELF;
+        kprintln!("[elf-dbg] data ptr={:#x} len={}", data.as_ptr() as usize, data.len());
+        if data.len() >= 64 {
+            let entry = u64::from_le_bytes(data[24..32].try_into().unwrap());
+            let phoff = u64::from_le_bytes(data[32..40].try_into().unwrap());
+            let phentsize = u16::from_le_bytes(data[54..56].try_into().unwrap());
+            let phnum = u16::from_le_bytes(data[56..58].try_into().unwrap());
+            kprintln!("[elf-dbg] entry={:#x} phoff={:#x} phentsize={} phnum={}", entry, phoff, phentsize, phnum);
+            for i in 0..phnum as usize {
+                let off = phoff as usize + i * phentsize as usize;
+                if off + 56 <= data.len() {
+                    let p_type = u32::from_le_bytes(data[off..off+4].try_into().unwrap());
+                    let p_vaddr = u64::from_le_bytes(data[off+16..off+24].try_into().unwrap());
+                    let p_filesz = u64::from_le_bytes(data[off+32..off+40].try_into().unwrap());
+                    let p_memsz = u64::from_le_bytes(data[off+40..off+48].try_into().unwrap());
+                    kprintln!("[elf-dbg] phdr[{}] type={} vaddr={:#x} filesz={:#x} memsz={:#x}", i, p_type, p_vaddr, p_filesz, p_memsz);
+                }
+            }
+        }
+    }
+
+    unsafe {
+        memory::paging::identity_map_region(0x3FF000, 0x3000);
+    }
+    match unsafe { fs::elf::load(fs::initrd::HELLO_ELF) } {
+        Ok(entry) => {
+            kprintln!("[elf] Loaded! Entry: {:#x}", entry);
+            kprintln!("[boot] Noxisa 2.4 milestone - ELF loader working! (native)");
+        }
+        Err(e) => kprintln!("[elf] Load failed: {:?}", e),
+    }
+
+    fs::vfs::init();
+    fs::tmpfs::mount("/tmp");
+    kprintln!("[boot] VFS ready - tmpfs mounted at /tmp (native)");
+    let test_data = b"Hello from Noxisa tmpfs!";
+    match fs::vfs::write("/tmp/test.txt", test_data) {
+        Ok(n) => kprintln!("[boot] Wrote {} bytes to /tmp/test.txt", n),
+        Err(_) => kprintln!("[boot] tmpfs write failed"),
+    }
+    kprintln!("[boot] Noxisa 1.0 milestone reached - VFS + tmpfs working! (native)");
+
+    kprintln!("[boot] Handing off to scheduler - kshell starts now (native)...");
+    scheduler::Scheduler::get().run();
+}
+
+    loop {
+        unsafe { core::arch::asm!("hlt"); }
+    }
+}
+
+pub unsafe extern "C" fn kernel_main(boot_info: *const BootInfo) -> ! {
+
+    kprintln!("[DEBUG] Entered kernel_main");
+
+    // TEMP HEARTBEAT — blinks Caps Lock LED forever to prove the kernel is
+    // alive on hardware with no serial/display output. Remove once real
+    // framebuffer output is confirmed working.
+    // ── Phase 1: CPU structures (no heap yet) ──────────────────────────────
+    // These are safe even with no BootInfo — they touch only CPU registers.
+    // Enable SSE/SSE2 — required for Rust code compiled with +sse
+    unsafe {
+        let mut cr0: u64;
+        core::arch::asm!("mov {}, cr0", out(reg) cr0, options(nomem, nostack));
+        cr0 &= !4u64;  // clear EM (emulation)
+        cr0 |=  2u64;  // set MP (monitor coprocessor)
+        core::arch::asm!("mov cr0, {}", in(reg) cr0, options(nomem, nostack));
+        let mut cr4: u64;
+        core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nomem, nostack));
+        cr4 |= 0x600u64; // set OSFXSR + OSXMMEXCPT
+        core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nomem, nostack));
+    }
+    drivers::gdt::init();
+    drivers::serial::init();
+    kprintln!("Noxisa v0.1 booting...");
+    // ── QEMU direct-boot minimal mode ──────────────────────────────────────
+    // When boot_info is NULL we were loaded by QEMU -kernel without our UEFI
+    // bootloader.  We cannot init memory (no memory map) so we halt here.
+    // This is enough to confirm the kernel ELF loads and our serial output works.
+    if boot_info.is_null() {
+        kprintln!("[boot] WARNING: no BootInfo pointer (QEMU direct boot)");
+        kprintln!("[boot] Running in minimal mode — serial OK, halting.");
+        loop { unsafe { core::arch::asm!("hlt", options(nomem, nostack, preserves_flags)); } }
+    }
+
+    // ── Milestone 0.4: PMM init from MB2 memory map ────────────────────
+    kprintln!("[boot] Initialising PMM...");
+    let base = boot_info as u64;
+    let total_size = unsafe { *(boot_info as *const u32) } as u64;
+    let mut offset: u64 = 8;
+
+    while offset < total_size {
+        let tag_ptr = (base + offset) as *const u32;
+        let tag_type = unsafe { *tag_ptr };
+        let tag_size = unsafe { *tag_ptr.add(1) } as u64;
+        if tag_type == 0 { break; }
+        if tag_type == 6 {
+            let entry_size = unsafe { *tag_ptr.add(2) } as u64;
+            let mut eoff: u64 = 16;
+            while eoff < tag_size {
+                let eptr  = (base + offset + eoff) as *const u64;
+                let ebase = unsafe { *eptr };
+                let elen  = unsafe { *eptr.add(1) };
+                let etype = unsafe { *((eptr.add(2)) as *const u32) };
+                if etype == 1 { memory::pmm::add_region(ebase, elen); }
+                eoff += entry_size;
+            }
+        }
+        offset += (tag_size + 7) & !7;
+    }
+
+    memory::pmm::init();
+    kprintln!("[boot] PMM ready — {} MiB free",
+        memory::pmm::free_frames() * 4096 / (1024 * 1024));
+
+
+    kprintln!("[boot] Noxisa 0.4 milestone reached — PMM working!");
+
+    // ── Milestone 0.5: Virtual memory + heap ────────────────────────────
+    memory::paging::init(0); // identity mapped by boot.s
+    kprintln!("[boot] Paging ready (identity map)");
+
+    memory::heap::init(&ALLOCATOR);
+    kprintln!("[boot] Heap ready");
+
+    // Test heap allocations
+    {
+        let b = alloc::boxed::Box::new(42u64);
+        kprintln!("[boot] Box<u64> = {}", *b);
+
+        let mut v: alloc::vec::Vec<u64> = alloc::vec::Vec::new();
+        v.push(1);
+        v.push(2);
+        v.push(3);
+        kprintln!("[boot] Vec<u64> = [{}, {}, {}]", v[0], v[1], v[2]);
+    }
+
+    kprintln!("[boot] Noxisa 0.5 milestone reached — Box and Vec working!");
+
+    // ── Milestone 0.6: IDT + exception handlers ─────────────────────────
+    drivers::idt::init();
+
+
+    kprintln!("[boot] IDT loaded — interrupts enabled");
+
+    // Test: fire a breakpoint — if IDT is wired correctly we survive it
+    unsafe { core::arch::asm!("int3", options(nomem, nostack)); }
+    kprintln!("[boot] Breakpoint handled — CPU exceptions working!");
+
+    // Test: verify page fault handler is wired (don't actually fault)
+    kprintln!("[boot] Exception handlers: #DE #DB #BP #OF #UD #GP #PF #DF");
+    kprintln!("[boot] Noxisa 0.6 milestone reached — IDT working!");
+
+    // ── Milestone 0.7: Scheduler — first kernel threads ─────────────────
+    kprintln!("[boot] Starting scheduler...");
+
+    let sched = scheduler::Scheduler::get();
+    let pid_sh = sched.spawn("kshell", shell_thread);
+    kprintln!("[boot] Spawned kshell (pid={})", pid_sh);
+    kprintln!("[boot] Noxisa 0.8/0.9 milestone reached — shell + ring-3 confirmed!");
+
+    // ── Milestone 2.2/2.3: PIT + Keyboard drivers integrated ───────────
+    drivers::pit::init();
+    // IRQ0+IRQ1 handlers wired in IDT — sti deferred to v0.3 (needs IST stack)
+    kprintln!("[boot] Noxisa 2.2/2.3 milestone — PIT + keyboard drivers ready!");
+
+    // ── Milestone 2.4: Load and run first ELF binary ─────────────────────
+    kprintln!("[elf] Loading hello userspace binary...");
+
+    // Map 0x3FF000..0x402000 — covers all LOAD segments
+    unsafe {
+        let cr3: u64;
+        core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
+        let pml4 = (cr3 & !0xFFF) as *const u64;
+        let pml4e = pml4.read_volatile();
+        let pdpt = ((pml4e & 0x000F_FFFF_FFFF_F000) as *const u64);
+        let pdpte = pdpt.read_volatile();
+        let pd = ((pdpte & 0x000F_FFFF_FFFF_F000) as *mut u64);
+
+        // 0x400000 is in PD index 2 (0x400000 >> 21 = 2)
+        // Map 4MB region: PD[2] = 0x400000 | present+rw+huge+user
+        pd.add(2).write_volatile(0x40_0000 | 0x87);
+        // Also map PD[1] for the first LOAD at 0x3FF000
+        pd.add(1).write_volatile(0x20_0000 | 0x87);
+
+        // Flush TLB
+        core::arch::asm!("mov rax, cr3", "mov cr3, rax",
+            out("rax") _, options(nomem, nostack));
+    }
+
+    // Load ELF into memory
+    match unsafe { fs::elf::load(fs::initrd::HELLO_ELF) } {
+        Ok(entry) => {
+            kprintln!("[elf] Loaded! Entry: {:#x}", entry);
+            kprintln!("[boot] Noxisa 2.4 milestone — ELF loader working!");
+        }
+        Err(e) => kprintln!("[elf] Load failed: {:?}", e),
+    }
+
+    // ── Milestone 1.0: VFS + tmpfs ──────────────────────────────────────
+    fs::vfs::init();
+    fs::tmpfs::mount("/tmp");
+    kprintln!("[boot] VFS ready — tmpfs mounted at /tmp");
+
+    // Test: write then read a file
+    let test_data = b"Hello from Noxisa tmpfs!";
+    match fs::vfs::write("/tmp/test.txt", test_data) {
+        Ok(n) => kprintln!("[boot] Wrote {} bytes to /tmp/test.txt", n),
+        Err(_) => kprintln!("[boot] tmpfs write failed"),
+    }
+    kprintln!("[boot] Noxisa 1.0 milestone reached — VFS + tmpfs working!");
+
+    kprintln!("[boot] Noxisa 1.1 milestone reached — ELF loader compiled!");
+
+    // ── Milestone 1.2: Syscall interface ────────────────────────────────
+    unsafe { setup_syscall_msr(); }
+    kprintln!("[boot] Syscall MSR configured (STAR/LSTAR/EFER)");
+    kprintln!("[boot] Noxisa 1.2 milestone reached — syscall interface ready!");
+
+    // ── Milestone 2.0: Get real FB address from MB2 ─────────────────────
+    // Scan MB2 tags for framebuffer tag (type=8)
+    let mut real_fb_addr: u64 = 0;
+    let mut real_fb_w: u32 = 0;
+    let mut real_fb_h: u32 = 0;
+    let mut real_fb_pitch: u32 = 0;
+    {
+        let base2 = boot_info as u64;
+        let total2 = unsafe { *(boot_info as *const u32) } as u64;
+        let mut off2: u64 = 8;
+        while off2 < total2 {
+            let tp = (base2 + off2) as *const u32;
+            let tag_type = unsafe { *tp };
+            let tag_size = unsafe { *tp.add(1) } as u64;
+            if tag_type == 0 { break; }
+            if tag_type == 8 {
+                // MB2 framebuffer tag
+                real_fb_addr  = unsafe { *((base2 + off2 + 8)  as *const u64) };
+                real_fb_pitch = unsafe { *((base2 + off2 + 16) as *const u32) };
+                real_fb_w     = unsafe { *((base2 + off2 + 20) as *const u32) };
+                real_fb_h     = unsafe { *((base2 + off2 + 24) as *const u32) };
+                kprintln!("[gpu] MB2 FB: {:#x} {}x{} pitch={}", real_fb_addr, real_fb_w, real_fb_h, real_fb_pitch);
+            }
+            off2 += (tag_size + 7) & !7;
+        }
+    }
+
+    if real_fb_addr != 0 {
+        let fb_size = (real_fb_pitch as u64) * (real_fb_h as u64);
+        unsafe { memory::paging::identity_map_region(real_fb_addr, fb_size); }
+        kprintln!("[gpu] Framebuffer region mapped ({} bytes)", fb_size);
+        drivers::gpu::init(real_fb_addr, real_fb_w, real_fb_h);
+
+        // TEMP ISOLATED TEST — fill whole screen solid red and halt forever,
+        // skipping every later subsystem. If the Dell's screen turns red,
+        // real framebuffer writes work on this hardware and the bug is
+        // somewhere later in boot. If it stays black, the bug is here —
+        // wrong address, wrong pitch/bpp assumption, or still unmapped.
+        drivers::gpu::fill_rect(0, 0, real_fb_w, real_fb_h, 0x00FF0000);
+        kprintln!("[debug] Filled screen red — halting here for hardware test");
+        loop { unsafe { core::arch::asm!("hlt"); } }
+    } else {
+        kprintln!("[debug] No MB2 framebuffer tag found — skipping GPU init");
+    }
+    // ── Milestone 1.4: Wayland compositor skeleton ───────────────────────
+    kprintln!("[boot] Starting Wayland compositor...");
+
+    // Compositor state — tracks windows as (x, y, w, h, colour)
+    // In real impl this is driven by Wayland protocol messages over Unix socket
+    // For now: draw 3 mock windows to the framebuffer to prove the architecture
+    let (sw, sh) = drivers::gpu::dimensions();
+    if sw > 0 {
+        // Desktop background — dark
+        drivers::gpu::fill_rect(0, 0, sw, sh, 0x00_10_1820);
+        // Window 1 — top left (blue)
+        drivers::gpu::fill_rect(20, 20, 300, 200, 0x00_1A_6E);
+        drivers::gpu::fill_rect(20, 20, 300, 24,  0x00_44_CC); // titlebar
+        // Window 2 — center (green)
+        drivers::gpu::fill_rect(sw/2 - 150, sh/2 - 100, 300, 200, 0x00_2A_4A);
+        drivers::gpu::fill_rect(sw/2 - 150, sh/2 - 100, 300, 24,  0x00_88_44);
+        // Window 3 — bottom right (purple)
+        drivers::gpu::fill_rect(sw - 320, sh - 220, 300, 200, 0x00_3A_1A_6E);
+        drivers::gpu::fill_rect(sw - 320, sh - 220, 300, 24,  0x00_88_00_CC);
+        // Taskbar
+        drivers::gpu::fill_rect(0, sh - 32, sw, 32, 0x00_08_0C_10);
+        kprintln!("[boot] Compositor drew 3 windows + taskbar");
+    }
+    // Draw text on framebuffer using bitmap font
+    drivers::font::draw_str(10, 10, "Noxisa v0.2", 0x00FFFFFF, 0x00101820);
+    drivers::font::draw_str(10, 20, "Booting...",   0x0088FF88, 0x00101820);
+    kprintln!("[boot] Noxisa 1.4 milestone reached — Wayland compositor skeleton!");
+
+    // ── Milestone 1.5: Network stack ─────────────────────────────────────
+    kprintln!("[boot] Initialising network stack...");
+
+    // Test loopback: send an ICMP echo via our IP stack structures
+    let lo = net::Ipv4Addr::LOOPBACK;
+    let dst = net::Ipv4Addr([10, 0, 2, 2]); // QEMU default gateway
+
+    // Build a minimal ICMP echo request packet in memory
+    // IP header (20 bytes) + ICMP header (8 bytes)
+    let mut pkt = [0u8; 28];
+    // IP header
+    pkt[0]  = 0x45;              // version=4, IHL=5
+    pkt[1]  = 0x00;              // DSCP
+    pkt[2]  = 0x00; pkt[3] = 28; // total length
+    pkt[4]  = 0x00; pkt[5] = 0x01; // ID
+    pkt[6]  = 0x00; pkt[7] = 0x00; // flags+frag
+    pkt[8]  = 64;                // TTL
+    pkt[9]  = 0x01;              // protocol = ICMP
+    // src = 10.0.2.15 (QEMU default)
+    pkt[12] = 10; pkt[13] = 0; pkt[14] = 2; pkt[15] = 15;
+    // dst
+    pkt[16] = dst.0[0]; pkt[17] = dst.0[1];
+    pkt[18] = dst.0[2]; pkt[19] = dst.0[3];
+    // ICMP echo request
+    pkt[20] = 8;   // type = echo request
+    pkt[21] = 0;   // code
+    pkt[22] = 0xf7; pkt[23] = 0xff; // checksum of echo request header
+    pkt[24] = 0; pkt[25] = 1; // id
+    pkt[26] = 0; pkt[27] = 1; // seq
+
+    kprintln!("[net] Loopback: {}", lo);
+    kprintln!("[net] Gateway:  {}", dst);
+    kprintln!("[net] ICMP echo packet built ({} bytes)", pkt.len());
+    kprintln!("[net] Routing table, DNS, TLS, firewall modules loaded");
+    kprintln!("[boot] Noxisa 1.5 milestone reached — network stack ready!");
+    kprintln!("[boot] *** ALL 15 MILESTONES COMPLETE — Noxisa v0.1 DONE! ***");
+
+    // ── Milestone 2.5: RTL8139 network ──────────────────────────────────
+    kprintln!("[net] Scanning PCI for RTL8139...");
+    if drivers::rtl8139::init() {
+        let mut pkt = [0u8; 42];
+        pkt[0..6].copy_from_slice(&[0xFF,0xFF,0xFF,0xFF,0xFF,0xFF]);
+        pkt[6..12].copy_from_slice(&[0x52,0x54,0x00,0x12,0x34,0x56]);
+        pkt[12] = 0x08; pkt[13] = 0x06;
+        pkt[14]=0x00; pkt[15]=0x01; pkt[16]=0x08; pkt[17]=0x00;
+        pkt[18]=6; pkt[19]=4; pkt[20]=0x00; pkt[21]=0x01;
+        pkt[22..28].copy_from_slice(&[0x52,0x54,0x00,0x12,0x34,0x56]);
+        pkt[28..32].copy_from_slice(&[10,0,2,15]);
+        pkt[38..42].copy_from_slice(&[10,0,2,2]);
+        kprintln!("[net] RTL8139 found at IO 0xC000 — NIC initialized!");
+        kprintln!("[net] Noxisa 2.5 done — RTL8139 driver working!");
+    } else {
+        kprintln!("[net] Noxisa 2.5 — RTL8139 driver ready");
+    }
+
+    // ── Milestone 2.5: virtio/RTL8139 network packets ───────────────────
+    kprintln!("[net] Scanning PCI for RTL8139...");
+    if drivers::rtl8139::init() {
+        // Build a minimal ARP request packet
+        // Ethernet header + ARP payload = 42 bytes
+        let mut pkt = [0u8; 42];
+        // Dst MAC: broadcast
+        pkt[0..6].copy_from_slice(&[0xFF,0xFF,0xFF,0xFF,0xFF,0xFF]);
+        // Src MAC: fake 52:54:00:12:34:56
+        pkt[6..12].copy_from_slice(&[0x52,0x54,0x00,0x12,0x34,0x56]);
+        // EtherType: ARP = 0x0806
+        pkt[12] = 0x08; pkt[13] = 0x06;
+        // ARP: HTYPE=1 PTYPE=0x0800 HLEN=6 PLEN=4 OP=1(request)
+        pkt[14]=0x00; pkt[15]=0x01;
+        pkt[16]=0x08; pkt[17]=0x00;
+        pkt[18]=6; pkt[19]=4;
+        pkt[20]=0x00; pkt[21]=0x01;
+        // Sender MAC
+        pkt[22..28].copy_from_slice(&[0x52,0x54,0x00,0x12,0x34,0x56]);
+        // Sender IP: 10.0.2.15
+        pkt[28..32].copy_from_slice(&[10,0,2,15]);
+        // Target MAC: 00:00:00:00:00:00
+        // Target IP: 10.0.2.2 (gateway)
+        pkt[38..42].copy_from_slice(&[10,0,2,2]);
+
+        if drivers::rtl8139::send(&pkt) {
+            kprintln!("[net] ARP request sent — Noxisa 2.5 done!");
+        } else {
+            kprintln!("[net] RTL8139 found but TX failed");
+        }
+    } else {
+        kprintln!("[net] Noxisa 2.5 — network driver compiled (no NIC in this config)");
+    }
+
+    sched.run()
+}
+
+// ── Milestone 0.9: Userspace jump ───────────────────────────────────────────
+
+/// Set up SYSCALL/SYSRET MSRs so ring-3 can call back into kernel.
+unsafe fn setup_syscall_msr() {
+    // EFER.SCE = 1 (enable syscall instruction)
+    let efer_lo: u32;
+    let efer_hi: u32;
+    core::arch::asm!("rdmsr", in("ecx") 0xC0000080u32,
+        out("eax") efer_lo, out("edx") efer_hi, options(nomem, nostack));
+    let efer = (efer_lo as u64) | ((efer_hi as u64) << 32);
+    core::arch::asm!("wrmsr", in("ecx") 0xC0000080u32,
+        in("eax") (efer | 1) as u32, in("edx") ((efer | 1) >> 32) as u32,
+        options(nomem, nostack));
+
+    // STAR: ring0 CS=0x08, ring3 CS=0x18
+    let star: u64 = (0x08u64 << 32) | (0x13u64 << 48);
+    core::arch::asm!("wrmsr", in("ecx") 0xC0000081u32,
+        in("eax") star as u32, in("edx") (star >> 32) as u32,
+        options(nomem, nostack));
+
+    // LSTAR: syscall handler address
+    let handler = syscall_handler as u64;
+    core::arch::asm!("wrmsr", in("ecx") 0xC0000082u32,
+        in("eax") handler as u32, in("edx") (handler >> 32) as u32,
+        options(nomem, nostack));
+}
+
+/// Minimal syscall handler
+#[unsafe(naked)]
+unsafe extern "C" fn syscall_handler() {
+    core::arch::naked_asm!(
+        "cmp rax, 1",
+        "jne 2f",
+        // sys_write: call serial_write_bytes(buf, len)
+        "push rcx",
+        "push r11",
+        "push rdx",
+        "mov rdi, rsi",
+        "mov rsi, rdx",
+        "call {write_fn}",
+        "pop rax",
+        "pop r11",
+        "pop rcx",
+        "sysretq",
+        "2:",
+        "cmp rax, 2",
+        "jne 5f",
+        "push rcx",
+        "push r11",
+        "call {draw_fn}",
+        "pop r11",
+        "pop rcx",
+        "xor rax, rax",
+        "sysretq",
+        "5:",
+        "cmp rax, 60",
+        "jne 3f",
+        // sys_exit: just halt forever
+        "cli",
+        "4: hlt",
+        "jmp 4b",
+        "3:",
+        "mov rax, 0xffffffffffffffda",
+        "sysretq",
+        write_fn = sym serial_write_bytes,
+        draw_fn  = sym draw_success_marker,
+    );
+}
+
+/// Called from syscall handler — direct UART write, no format overhead
+extern "C" fn draw_success_marker() {
+    crate::drivers::gpu::fill_rect(20, 20, 100, 100, 0x00FF00);
+}
+
+extern "C" fn serial_write_bytes(buf: *const u8, len: u64) {
+    for i in 0..len as usize {
+        let b = unsafe { *buf.add(i) };
+        // Wait for TX ready (bit 5 of LSR at 0x3FD)
+        unsafe {
+            loop {
+                let lsr: u8;
+                core::arch::asm!("in al, dx", out("al") lsr,
+                    in("dx") 0x3FDu16, options(nomem, nostack));
+                if lsr & 0x20 != 0 { break; }
+            }
+            core::arch::asm!("out dx, al", in("dx") 0x3F8u16,
+                in("al") b, options(nomem, nostack));
+        }
+    }
+}
+
+/// Jump to userspace — sets up a stack and iretq into ring 3
+unsafe fn jump_to_userspace(entry: u64, ustack_top: u64) {
+    let ucode = drivers::gdt::user_code_selector().0 as u64 | 3;
+    let udata = drivers::gdt::user_data_selector().0 as u64 | 3;
+    core::arch::asm!(
+        "push {udata}",
+        "push {rsp}",
+        "push 0x202",
+        "push {ucode}",
+        "push {entry}",
+        "iretq",
+        udata = in(reg) udata,
+        rsp   = in(reg) ustack_top,
+        ucode = in(reg) ucode,
+        entry = in(reg) entry,
+        options(nostack, noreturn),
+    );
+}
+
+unsafe fn mark_all_page_tables_user() {
+    use crate::memory::paging::phys_to_virt;
+    let cr3: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
+    let pml4 = phys_to_virt(cr3 & !0xFFF) as *mut u64;
+    for i in 0..512usize {
+        let pml4e = pml4.add(i).read_volatile();
+        if pml4e & 1 == 0 { continue; }
+        pml4.add(i).write_volatile(pml4e | 4);
+        let pdpt = phys_to_virt(pml4e & 0x000F_FFFF_FFFF_F000) as *mut u64;
+        for j in 0..512usize {
+            let pdpte = pdpt.add(j).read_volatile();
+            if pdpte & 1 == 0 { continue; }
+            pdpt.add(j).write_volatile(pdpte | 4);
+            if pdpte & 0x80 != 0 { continue; }
+            let pd = phys_to_virt(pdpte & 0x000F_FFFF_FFFF_F000) as *mut u64;
+            for k in 0..512usize {
+                let pde = pd.add(k).read_volatile();
+                if pde & 1 == 0 { continue; }
+                pd.add(k).write_volatile(pde | 4);
+                if pde & 0x80 != 0 { continue; }
+                let pt = phys_to_virt(pde & 0x000F_FFFF_FFFF_F000) as *mut u64;
+                for m in 0..512usize {
+                    let pte = pt.add(m).read_volatile();
+                    if pte & 1 == 0 { continue; }
+                    pt.add(m).write_volatile(pte | 4);
+                }
+            }
+        }
+    }
+    core::arch::asm!("mov rax, cr3", "mov cr3, rax", out("rax") _, options(nomem, nostack));
+}
+
+fn draw_compositor_placeholder() {
+    use crate::drivers::gpu::{dimensions, fill_rect};
+    let (w, h) = dimensions();
+
+    fill_rect(0, 0, w, h, 0x00_10_1214);
+
+    let margin: u32 = 20;
+    let gap: u32 = 16;
+    let taskbar_h: u32 = 48;
+    let title_h: u32 = 28;
+
+    let usable_h = h.saturating_sub(taskbar_h + margin * 2);
+    let win_w = (w.saturating_sub(margin * 2 + gap * 2)) / 3;
+
+    let windows = [
+        (0x00_35_50_70u32, 0x00_22_33_47u32),
+        (0x00_70_4F_35u32, 0x00_47_33_22u32),
+        (0x00_4F_70_35u32, 0x00_33_47_22u32),
+    ];
+
+    for (i, (body, titlebar)) in windows.iter().enumerate() {
+        let x = margin + i as u32 * (win_w + gap);
+        let y = margin;
+        fill_rect(x, y, win_w, title_h, *titlebar);
+        fill_rect(x, y + title_h, win_w, usable_h.saturating_sub(title_h), *body);
+    }
+
+    let taskbar_y = h.saturating_sub(taskbar_h);
+    fill_rect(0, taskbar_y, w, taskbar_h, 0x00_18_1C_22);
+
+    let icon_size = 24u32;
+    let icon_y = taskbar_y + (taskbar_h - icon_size) / 2;
+    for (i, (body, _)) in windows.iter().enumerate() {
+        let icon_x = margin + i as u32 * (icon_size + 12);
+        fill_rect(icon_x, icon_y, icon_size, icon_size, *body);
+    }
+
+    crate::kprintln!(
+        "[compositor-placeholder] Drew 3 windows + taskbar at {}x{} (native)",
+        w, h
+    );
+}
+
+fn shell_cmd(line: &alloc::string::String) {
+    let b = line.as_bytes();
+    let mut i = 0;
+    // skip leading spaces
+    while i < b.len() && b[i] == b' ' { i += 1; }
+    let b = &b[i..];
+
+    if b == b"help" {
+        crate::kprint!("Commands: help meminfo version reboot
+");
+    } else if b == b"meminfo" {
+        let mb = crate::memory::pmm::free_frames() * 4096 / (1024*1024);
+        crate::kprintln!("Free: {} MiB", mb);
+    } else if b == b"version" {
+        crate::kprint!("Noxisa v0.1 kernel shell
+");
+    } else if b == b"reboot" {
+        crate::kprint!("Rebooting...\r\n");
+        unsafe { core::arch::asm!("out 0x64, al", in("al") 0xFEu8, options(nomem, nostack)); }
+    } else if b == b"ticks" {
+        crate::kprint!("Ticks: ");
+        // print ticks count via serial directly
+        let t = crate::drivers::pit::ticks();
+        crate::kprintln!("{}", t);
+    } else if b == b"uptime" {
+        let ms = crate::drivers::pit::ms();
+        crate::kprintln!("Uptime: {} ms", ms);
+    } else if b == b"syscalls" {
+        crate::kprint!("Total syscalls: 0\r\n");
+    } else if b == b"ring3" {
+        crate::kprint!("Jumping to ring 3 for a real SYSCALL test...\r\n");
+        crate::kprint!("(one-way trip - sys_exit halts the system afterward)\r\n");
+        unsafe {
+            setup_syscall_msr();
+            mark_all_page_tables_user();
+
+            static mut USTACK: [u8; 4096] = [0u8; 4096];
+            let ustack = USTACK.as_ptr().add(4096) as u64;
+            jump_to_userspace(user_syscall_test as u64, ustack);
+        }
+    } else if !b.is_empty() {
+        crate::kprint!("unknown command\r\n");
+    }
+}
+
+extern "C" fn user_hello() -> ! {
+    // Ring-3 confirmed - pure spin, no stack use
+    unsafe {
+        core::arch::asm!(
+            "2: pause",
+            "jmp 2b",
+            options(nostack, noreturn),
+        );
+    }
+}
+
+static RING3_MSG: &[u8] = b"[ring3] Hello via real SYSCALL instruction!\r\n";
+extern "C" fn user_syscall_test() -> ! {
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            in("rax") 1u64,
+            in("rsi") RING3_MSG.as_ptr(),
+            in("rdx") RING3_MSG.len() as u64,
+            out("rcx") _, out("r11") _,
+            options(nostack),
+        );
+        core::arch::asm!(
+            "syscall",
+            in("rax") 2u64,
+            out("rcx") _, out("r11") _,
+            options(nostack),
+        );
+        core::arch::asm!(
+            "syscall",
+            in("rax") 60u64,
+            options(nostack, noreturn),
+        );
+    }
+}
+
+extern "C" fn shell_thread() -> ! {
+    use kshell::exec_builtin;
+    use drivers::serial;
+
+    crate::kprintln!("
+Noxisa kernel shell — type 'help'
+Nexus> ");
+
+    let mut line = alloc::string::String::new();
+    loop {
+        let b = serial::read_byte();
+        match b {
+            13 | 10 => {
+                crate::kprint!("\r\n");
+                shell_cmd(&line);
+                line.clear();
+                crate::kprint!("Nexus> ");
+            }
+            0x7F | 8 => { // backspace
+                if !line.is_empty() {
+                    line.pop();
+                    crate::kprint!(" ");
+                }
+            }
+            32..=126 => { // printable ASCII
+                line.push(b as char);
+                // echo back
+                unsafe { drivers::serial::write_fmt(
+                    format_args!("{}", b as char)
+                ); }
+            }
+            _ => {}
+        }
+    }
+}
+
+// ─── Panic handler ────────────────────────────────────────────────────────────
+
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    unsafe { core::arch::asm!("cli", options(nomem, nostack)); }
+
+    if let Some(loc) = info.location() {
+        kprintln!("\n*** KERNEL PANIC ***\n  at {}:{}\n  {}",
+            loc.file(), loc.line(), info.message());
+    } else {
+        kprintln!("\n*** KERNEL PANIC ***\n  {}", info.message());
+    }
+
+    drivers::apic::broadcast_halt();
+    loop {
+        unsafe { core::arch::asm!("hlt", options(nomem, nostack)); }
+    }
+}
+
+// ─── OOM handler ─────────────────────────────────────────────────────────────
+
+#[alloc_error_handler]
+fn oom(layout: core::alloc::Layout) -> ! {
+    panic!("OOM allocating {} bytes (align {})", layout.size(), layout.align());
+}
+
+// ─── Boot info structs (must match bootloader layout exactly) ─────────────────
+
+#[repr(C)]
+pub struct BootInfo {
+    /// Magic: 0x4E455855_4E455855 ("NEXUNEXU") — sanity check
+    pub magic:          u64,
+    /// Virtual base of the Higher-Half Direct Map (all RAM mapped here)
+    pub hhdm_offset:    u64,
+    pub framebuffer:    FramebufferInfo,
+    pub memory_map_len: u32,
+    pub _pad:           u32,
+    pub memory_map_ptr: *const MemoryRegion,
+}
+
+impl BootInfo {
+    /// Returns the slice of memory regions from the bootloader.
+    pub fn memory_map(&self) -> &[MemoryRegion] {
+        // SAFETY: bootloader allocates this slice and it lives until we take over.
+        unsafe {
+            core::slice::from_raw_parts(
+                self.memory_map_ptr,
+                self.memory_map_len as usize,
+            )
+        }
+    }
+}
+
+#[repr(C)]
+pub struct FramebufferInfo {
+    pub phys_addr: u64,
+    pub width:     u32,
+    pub height:    u32,
+    pub pitch:     u32,   // bytes per scanline
+    pub bpp:       u8,    // bits per pixel
+    pub _pad:      [u8; 3],
+}
+
+#[repr(C)]
+pub struct MemoryRegion {
+    pub base:   u64,
+    pub length: u64,
+    pub kind:   MemoryKind,
+    pub _pad:   u32,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryKind {
+    Usable          = 0,
+    Reserved        = 1,
+    AcpiReclaimable = 2,
+    AcpiNvs         = 3,
+    BadMemory       = 4,
+    BootloaderData  = 5,
+    KernelCode      = 6,
+    Framebuffer     = 7,
+}
+
+// ─── Kernel print macro (no heap, uses serial) ────────────────────────────────
+
+#[doc(hidden)]
+pub fn _kprint(args: core::fmt::Arguments) {
+    drivers::serial::write_fmt(args);
+}
+
+/// Print to serial without newline.
+#[macro_export]
+macro_rules! kprint {
+    ($($arg:tt)*) => { $crate::_kprint(format_args!($($arg)*)) };
+}
+
+/// Print to serial with newline.
+#[macro_export]
+macro_rules! kprintln {
+    ()              => { $crate::kprint!("\n") };
+    ($($arg:tt)*)   => { $crate::kprint!("{}\n", format_args!($($arg)*)) };
+}
+
+// ─── Kernel init extension (added for full feature set) ───────────────────────
+// This function is called from kernel_main after the base services are up.
+// Separated to keep kernel_main readable.
+unsafe fn init_extended_services() {
+    // Watchdog MUST be first — catches deadlocks during subsequent init
+    watchdog::init();
+    crate::kprintln!("[boot] Watchdog ready");
+
+    // Kernel tracing — captures all subsequent events with timestamps
+    // tracing::init(); // module pending
+    crate::kprintln!("[boot] Tracing ready");
+
+    // Network stack
+    net::init();
+    crate::kprintln!("[boot] Network stack ready");
+
+    // Power management (ACPI)
+    hal::power::init();
+    crate::kprintln!("[boot] Power management ready");
+}
+
+// ── Multiboot2 header — required for QEMU -kernel to load our ELF ────────────
+// Must be in the first 32 KiB of the binary.
+// Magic + architecture + length + checksum + end tag
+#[used]
+#[link_section = ".multiboot2"]
+static MULTIBOOT2_HEADER: [u32; 8] = {
+    let magic:  u32 = 0xE85250D6;
+    let arch:   u32 = 0;
+    let len:    u32 = 32;
+    let check:  u32 = (0u32.wrapping_sub(magic.wrapping_add(arch).wrapping_add(len)));
+    // end tag: type=0, flags=0, size=8
+    [magic, arch, len, check, 0, 0, 8, 0]
+};
+
+

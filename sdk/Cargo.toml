@@ -1,0 +1,16 @@
+[package]
+name    = "nexus-sdk"
+version = "0.1.0"
+edition = "2021"
+description = "NexusOS Developer SDK — build native apps with AI, privacy, and GPU acceleration"
+
+[lib]
+name = "nexus_sdk"
+path = "src/lib.rs"
+
+[[example]]
+name = "hello"
+path = "src/main.rs"
+
+[dependencies]
+# No external deps — SDK ships with the OS and uses OS IPC

@@ -1,0 +1,33 @@
+[package]
+name        = "ai_engine"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+
+[dependencies]
+tokio.workspace       = true
+anyhow.workspace      = true
+thiserror.workspace   = true
+log.workspace         = true
+serde.workspace       = true
+serde_json.workspace  = true
+reqwest.workspace     = true
+parking_lot.workspace = true
+lru.workspace         = true
+
+# Build script compiles the C++ GGML backend
+[build-dependencies]
+cc = "1.0"
+
+[features]
+default  = ["offline"]
+offline  = []   # include local inference (links libnexus_ai.so)
+online   = []   # include remote API calls
+
+[[bin]]
+name = "aidaemon"
+path = "src/daemon.rs"
+
+[lib]
+name = "ai_engine"
+path = "src/lib.rs"

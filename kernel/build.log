@@ -1,0 +1,536 @@
+   Compiling nexus-kernel v0.1.0 (/home/laksh/nexus-os/kernel)
+warning: unused import: `core::fmt`
+  --> src/drivers/intel_xe.rs:20:5
+   |
+20 | use core::fmt;
+   |     ^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `boxed::Box`
+  --> src/drivers/ax201.rs:29:57
+   |
+29 | use alloc::{string::String, string::ToString, vec::Vec, boxed::Box};
+   |                                                         ^^^^^^^^^^
+
+warning: unused import: `alloc::vec`
+  --> src/drivers/ax201.rs:30:5
+   |
+30 | use alloc::vec;
+   |     ^^^^^^^^^^
+
+warning: unused import: `boxed::Box`
+  --> src/drivers/wifi.rs:16:39
+   |
+16 | use alloc::{string::String, vec::Vec, boxed::Box};
+   |                                       ^^^^^^^^^^
+
+warning: unused import: `alloc::vec`
+  --> src/drivers/wifi.rs:17:5
+   |
+17 | use alloc::vec;
+   |     ^^^^^^^^^^
+
+warning: unused import: `Mutex`
+  --> src/ipc/mod.rs:10:12
+   |
+10 | use spin::{Mutex, RwLock};
+   |            ^^^^^
+
+warning: unused imports: `AtomicU64` and `Ordering`
+  --> src/security/capabilities.rs:16:26
+   |
+16 | use core::sync::atomic::{AtomicU64, Ordering};
+   |                          ^^^^^^^^^  ^^^^^^^^
+
+warning: unused imports: `AtomicBool`, `AtomicU32`, and `Ordering`
+  --> src/privacy/mod.rs:74:26
+   |
+74 | use core::sync::atomic::{AtomicU32, AtomicBool, Ordering};
+   |                          ^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^
+
+warning: unused import: `alloc::string::String`
+  --> src/compat/mod.rs:21:5
+   |
+21 | use alloc::string::String;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: the feature `naked_functions` has been stable since 1.88.0 and no longer requires an attribute to enable
+  --> src/main.rs:15:12
+   |
+15 | #![feature(naked_functions)]
+   |            ^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(stable_features)]` on by default
+
+warning: unused variable: `path`
+  --> src/fs/vfs.rs:82:15
+   |
+82 | fn find_mount(path: &str) -> Option<core::cell::Ref<'static, ()>> {
+   |               ^^^^ help: if this is intentional, prefix it with an underscore: `_path`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `name`
+   --> src/heal/mod.rs:168:33
+    |
+168 |         Fault::DeadlockDetected(name) => {
+    |                                 ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `case`
+   --> src/fuzz/mod.rs:153:32
+    |
+153 |     pub fn run_once(&mut self, case: &FuzzCase) -> bool {
+    |                                ^^^^ help: if this is intentional, prefix it with an underscore: `_case`
+
+warning: function `init_extended_services` is never used
+   --> src/main.rs:246:11
+    |
+246 | unsafe fn init_extended_services() {
+    |           ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `MMIO_CP_RB0_BASE` is never used
+  --> src/drivers/amdgpu.rs:35:7
+   |
+35 | const MMIO_CP_RB0_BASE:       u32 = 0xC100;  // Command Ring 0 base addr
+   |       ^^^^^^^^^^^^^^^^
+
+warning: constant `MMIO_CP_RB0_CNTL` is never used
+  --> src/drivers/amdgpu.rs:36:7
+   |
+36 | const MMIO_CP_RB0_CNTL:       u32 = 0xC104;  // Command Ring 0 control
+   |       ^^^^^^^^^^^^^^^^
+
+warning: constant `MMIO_CP_RB0_WPTR` is never used
+  --> src/drivers/amdgpu.rs:37:7
+   |
+37 | const MMIO_CP_RB0_WPTR:       u32 = 0xC108;  // Command Ring write pointer
+   |       ^^^^^^^^^^^^^^^^
+
+warning: constant `MMIO_CP_RB0_RPTR` is never used
+  --> src/drivers/amdgpu.rs:38:7
+   |
+38 | const MMIO_CP_RB0_RPTR:       u32 = 0xC10C;  // Command Ring read pointer
+   |       ^^^^^^^^^^^^^^^^
+
+warning: constant `SDMA_OP_COPY_LINEAR` is never used
+  --> src/drivers/amdgpu.rs:45:7
+   |
+45 | const SDMA_OP_COPY_LINEAR:    u32 = 0x01000000;
+   |       ^^^^^^^^^^^^^^^^^^^
+
+warning: field `mmio_phys` is never read
+  --> src/drivers/amdgpu.rs:69:5
+   |
+67 | pub struct AmdGpu {
+   |            ------ field in this struct
+68 |     id:          DeviceId,
+69 |     mmio_phys:   u64,   // BAR0 physical address
+   |     ^^^^^^^^^
+
+warning: constant `DSPACNTR` is never used
+  --> src/drivers/intel_xe.rs:41:7
+   |
+41 | const DSPACNTR:     u32 = 0x70180; // Display A plane control
+   |       ^^^^^^^^
+
+warning: constant `DSPASURF` is never used
+  --> src/drivers/intel_xe.rs:42:7
+   |
+42 | const DSPASURF:     u32 = 0x7019C; // Display A surface address
+   |       ^^^^^^^^
+
+warning: constant `DSPALINOFF` is never used
+  --> src/drivers/intel_xe.rs:43:7
+   |
+43 | const DSPALINOFF:   u32 = 0x70184; // Display A linear offset
+   |       ^^^^^^^^^^
+
+warning: constant `DSPASTRIDE` is never used
+  --> src/drivers/intel_xe.rs:44:7
+   |
+44 | const DSPASTRIDE:   u32 = 0x70188; // Display A stride (bytes per row)
+   |       ^^^^^^^^^^
+
+warning: constant `PIPEASRC` is never used
+  --> src/drivers/intel_xe.rs:46:7
+   |
+46 | const PIPEASRC:     u32 = 0x6001C; // Pipe A source image size
+   |       ^^^^^^^^
+
+warning: constant `HTOTAL_A` is never used
+  --> src/drivers/intel_xe.rs:47:7
+   |
+47 | const HTOTAL_A:     u32 = 0x60000; // Pipe A horizontal total
+   |       ^^^^^^^^
+
+warning: constant `HBLANK_A` is never used
+  --> src/drivers/intel_xe.rs:48:7
+   |
+48 | const HBLANK_A:     u32 = 0x60004; // Pipe A horizontal blank
+   |       ^^^^^^^^
+
+warning: constant `HSYNC_A` is never used
+  --> src/drivers/intel_xe.rs:49:7
+   |
+49 | const HSYNC_A:      u32 = 0x60008; // Pipe A horizontal sync
+   |       ^^^^^^^
+
+warning: constant `VTOTAL_A` is never used
+  --> src/drivers/intel_xe.rs:50:7
+   |
+50 | const VTOTAL_A:     u32 = 0x6000C; // Pipe A vertical total
+   |       ^^^^^^^^
+
+warning: constant `VBLANK_A` is never used
+  --> src/drivers/intel_xe.rs:51:7
+   |
+51 | const VBLANK_A:     u32 = 0x60010; // Pipe A vertical blank
+   |       ^^^^^^^^
+
+warning: constant `VSYNC_A` is never used
+  --> src/drivers/intel_xe.rs:52:7
+   |
+52 | const VSYNC_A:      u32 = 0x60014; // Pipe A vertical sync
+   |       ^^^^^^^
+
+warning: constant `DISPLAY_PLANE_ENABLE` is never used
+  --> src/drivers/intel_xe.rs:55:7
+   |
+55 | const DISPLAY_PLANE_ENABLE:  u32 = 1 << 31;
+   |       ^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `DISPLAY_PLANE_FORMAT` is never used
+  --> src/drivers/intel_xe.rs:56:7
+   |
+56 | const DISPLAY_PLANE_FORMAT:  u32 = 0x0C000000; // XRGB 8888
+   |       ^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `DISPLAY_PLANE_TILING` is never used
+  --> src/drivers/intel_xe.rs:57:7
+   |
+57 | const DISPLAY_PLANE_TILING:  u32 = 0; // Linear tiling
+   |       ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `reg_write` is never used
+   --> src/drivers/intel_xe.rs:110:11
+    |
+110 | unsafe fn reg_write(mmio_virt: u64, offset: u32, value: u32) {
+    |           ^^^^^^^^^
+
+warning: constant `CSR_HW_IF_CONFIG_REG` is never used
+  --> src/drivers/ax201.rs:57:7
+   |
+57 | const CSR_HW_IF_CONFIG_REG:    u32 = 0x000; // Hardware interface config
+   |       ^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `CSR_FH_INT_STATUS` is never used
+  --> src/drivers/ax201.rs:60:7
+   |
+60 | const CSR_FH_INT_STATUS:        u32 = 0x010; // FH (Firmware Handler) interrupt status
+   |       ^^^^^^^^^^^^^^^^^
+
+warning: constant `CSR_GPIO_IN` is never used
+  --> src/drivers/ax201.rs:61:7
+   |
+61 | const CSR_GPIO_IN:              u32 = 0x018; // GPIO input
+   |       ^^^^^^^^^^^
+
+warning: constant `CSR_EEPROM_REG` is never used
+  --> src/drivers/ax201.rs:65:7
+   |
+65 | const CSR_EEPROM_REG:           u32 = 0x02C; // EEPROM register
+   |       ^^^^^^^^^^^^^^
+
+warning: constant `CSR_EEPROM_GP` is never used
+  --> src/drivers/ax201.rs:66:7
+   |
+66 | const CSR_EEPROM_GP:            u32 = 0x030; // EEPROM general purpose
+   |       ^^^^^^^^^^^^^
+
+warning: constant `CSR_GIO_REG` is never used
+  --> src/drivers/ax201.rs:67:7
+   |
+67 | const CSR_GIO_REG:              u32 = 0x03C; // GIO (PCIe Gen I/O) control
+   |       ^^^^^^^^^^^
+
+warning: constant `CSR_GP_UCODE_REG` is never used
+  --> src/drivers/ax201.rs:68:7
+   |
+68 | const CSR_GP_UCODE_REG:         u32 = 0x048; // uCode general purpose
+   |       ^^^^^^^^^^^^^^^^
+
+warning: constant `CSR_UCODE_DRV_GP1` is never used
+  --> src/drivers/ax201.rs:69:7
+   |
+69 | const CSR_UCODE_DRV_GP1:        u32 = 0x054; // Driver-to-uCode general purpose 1
+   |       ^^^^^^^^^^^^^^^^^
+
+warning: constant `CSR_UCODE_DRV_GP1_SET` is never used
+  --> src/drivers/ax201.rs:70:7
+   |
+70 | const CSR_UCODE_DRV_GP1_SET:    u32 = 0x058; // GP1 set register
+   |       ^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `CSR_UCODE_DRV_GP1_CLR` is never used
+  --> src/drivers/ax201.rs:71:7
+   |
+71 | const CSR_UCODE_DRV_GP1_CLR:    u32 = 0x05C; // GP1 clear register
+   |       ^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `CSR_UCODE_DRV_GP2` is never used
+  --> src/drivers/ax201.rs:72:7
+   |
+72 | const CSR_UCODE_DRV_GP2:        u32 = 0x060; // Driver-to-uCode general purpose 2
+   |       ^^^^^^^^^^^^^^^^^
+
+warning: constant `CSR_LED_REG` is never used
+  --> src/drivers/ax201.rs:73:7
+   |
+73 | const CSR_LED_REG:              u32 = 0x094; // LED control
+   |       ^^^^^^^^^^^
+
+warning: constant `CSR_DRAM_INT_TBL_REG` is never used
+  --> src/drivers/ax201.rs:74:7
+   |
+74 | const CSR_DRAM_INT_TBL_REG:     u32 = 0x0A0; // DRAM interrupt table
+   |       ^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `CSR_MAC_SHADOW_REG_CTRL` is never used
+  --> src/drivers/ax201.rs:75:7
+   |
+75 | const CSR_MAC_SHADOW_REG_CTRL:  u32 = 0x0A8; // MAC shadow register control
+   |       ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `CSR_DBG_HPET_MEM_REG` is never used
+  --> src/drivers/ax201.rs:76:7
+   |
+76 | const CSR_DBG_HPET_MEM_REG:     u32 = 0x240; // HPET timer register
+   |       ^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `RESET_MASTER_DISABLED` is never used
+  --> src/drivers/ax201.rs:80:7
+   |
+80 | const RESET_MASTER_DISABLED:    u32 = 1 << 8;  // PCIe master disable
+   |       ^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `GP_CNTRL_REG_FLAG_GOING_TO_SLEEP` is never used
+  --> src/drivers/ax201.rs:84:7
+   |
+84 | const GP_CNTRL_REG_FLAG_GOING_TO_SLEEP:  u32 = 1 << 7;
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `TFD_TX_CMD_SLOTS` is never used
+  --> src/drivers/ax201.rs:95:7
+   |
+95 | const TFD_TX_CMD_SLOTS:  usize = 256; // Transmit Frame Descriptor ring size
+   |       ^^^^^^^^^^^^^^^^
+
+warning: constant `RX_QUEUE_SIZE` is never used
+  --> src/drivers/ax201.rs:96:7
+   |
+96 | const RX_QUEUE_SIZE:     usize = 512; // Receive queue size
+   |       ^^^^^^^^^^^^^
+
+warning: constant `RX_BUFFER_SIZE` is never used
+  --> src/drivers/ax201.rs:97:7
+   |
+97 | const RX_BUFFER_SIZE:    usize = 4096; // Each RX buffer: 4 KiB
+   |       ^^^^^^^^^^^^^^
+
+warning: constant `IWLWIFI_CSR_BASE` is never used
+  --> src/drivers/wifi.rs:22:7
+   |
+22 | const IWLWIFI_CSR_BASE:       u64 = 0x000; // MMIO CSR registers base
+   |       ^^^^^^^^^^^^^^^^
+
+warning: constant `IWLWIFI_HW_IF_CONFIG` is never used
+  --> src/drivers/wifi.rs:23:7
+   |
+23 | const IWLWIFI_HW_IF_CONFIG:   u32 = 0x000;
+   |       ^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `IWLWIFI_CSR_INT` is never used
+  --> src/drivers/wifi.rs:24:7
+   |
+24 | const IWLWIFI_CSR_INT:        u32 = 0x008; // Interrupt status
+   |       ^^^^^^^^^^^^^^^
+
+warning: constant `IWLWIFI_CSR_INT_MASK` is never used
+  --> src/drivers/wifi.rs:25:7
+   |
+25 | const IWLWIFI_CSR_INT_MASK:   u32 = 0x00C; // Interrupt mask
+   |       ^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `IWLWIFI_FH_RCSR_CHNL0` is never used
+  --> src/drivers/wifi.rs:27:7
+   |
+27 | const IWLWIFI_FH_RCSR_CHNL0:  u32 = 0x820; // RX channel 0 descriptor ring
+   |       ^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `IWLWIFI_FH_TCSR_CHNL0` is never used
+  --> src/drivers/wifi.rs:28:7
+   |
+28 | const IWLWIFI_FH_TCSR_CHNL0:  u32 = 0xD00; // TX channel 0 descriptor ring
+   |       ^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `IWLWIFI_FIRMWARE_MAGIC` is never used
+  --> src/drivers/wifi.rs:29:7
+   |
+29 | const IWLWIFI_FIRMWARE_MAGIC:  u32 = 0x49776C77; // "Iwlw"
+   |       ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `current_ssid` is never read
+  --> src/drivers/wifi.rs:72:5
+   |
+65 | pub struct IntelWifi {
+   |            --------- field in this struct
+...
+72 |     current_ssid: Option<String>,
+   |     ^^^^^^^^^^^^
+
+warning: methods `probe_channel` and `wpa2_handshake` are never used
+   --> src/drivers/wifi.rs:118:8
+    |
+ 77 | impl IntelWifi {
+    | -------------- methods in this implementation
+...
+118 |     fn probe_channel(&mut self, channel: u8) {
+    |        ^^^^^^^^^^^^^
+...
+125 |     fn wpa2_handshake(&mut self, psk: &str, bssid: &[u8; 6]) -> Result<(), HalError> {
+    |        ^^^^^^^^^^^^^^
+
+warning: constant `RTL_TCR` is never used
+   --> src/drivers/wifi.rs:229:7
+    |
+229 | const RTL_TCR:   u32 = 0x40; // Transmit configuration
+    |       ^^^^^^^
+
+warning: constant `RTL_IMR` is never used
+   --> src/drivers/wifi.rs:232:7
+    |
+232 | const RTL_IMR:   u32 = 0x3C; // Interrupt mask register
+    |       ^^^^^^^
+
+warning: constant `RTL_ISR` is never used
+   --> src/drivers/wifi.rs:233:7
+    |
+233 | const RTL_ISR:   u32 = 0x3E; // Interrupt status register
+    |       ^^^^^^^
+
+warning: constant `RTL_RDSAR` is never used
+   --> src/drivers/wifi.rs:234:7
+    |
+234 | const RTL_RDSAR: u32 = 0xE4; // Rx descriptor start address
+    |       ^^^^^^^^^
+
+warning: constant `RTL_TNPDS` is never used
+   --> src/drivers/wifi.rs:235:7
+    |
+235 | const RTL_TNPDS: u32 = 0x20; // Tx normal priority start address
+    |       ^^^^^^^^^
+
+warning: function `find_mount` is never used
+  --> src/fs/vfs.rs:82:4
+   |
+82 | fn find_mount(path: &str) -> Option<core::cell::Ref<'static, ()>> {
+   |    ^^^^^^^^^^
+
+warning: field `name` is never read
+  --> src/ipc/mod.rs:70:5
+   |
+68 | struct Channel {
+   |        ------- field in this struct
+69 |     id:   ChannelId,
+70 |     name: String,
+   |     ^^^^
+
+warning: constant `CR4_PKE` is never used
+  --> src/security/hardware.rs:55:7
+   |
+55 | const CR4_PKE:  u64 = 1 << 22; // PKU enable (user-mode protection keys)
+   |       ^^^^^^^
+
+warning: function `has_rdrand` is never used
+   --> src/security/hardware.rs:142:4
+    |
+142 | fn has_rdrand()-> bool { cpu_supports_feature(1, 2, 30) } // ECX bit 30
+    |    ^^^^^^^^^^
+
+warning: field `parent` is never read
+  --> src/security/namespaces.rs:36:5
+   |
+32 | pub struct PidNs {
+   |            ----- field in this struct
+...
+36 |     parent:     Option<NsId>,
+   |     ^^^^^^
+   |
+   = note: `PidNs` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `ttl` is never read
+  --> src/net/mod.rs:74:33
+   |
+74 | struct DnsEntry { ip: Ipv4Addr, ttl: u32 }
+   |        --------                 ^^^
+   |        |
+   |        field in this struct
+
+warning: field `altstack` is never read
+  --> src/signal/mod.rs:73:5
+   |
+65 | pub struct SigState {
+   |            -------- field in this struct
+...
+73 |     altstack: Option<AltStack>,
+   |     ^^^^^^^^
+   |
+   = note: `SigState` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `pid` and `in_flight` are never read
+   --> src/io_uring/mod.rs:116:5
+    |
+102 | pub struct IoRing {
+    |            ------ fields in this struct
+...
+116 |     pid:    u32,
+    |     ^^^
+117 |     /// Number of pending operations
+118 |     in_flight: u32,
+    |     ^^^^^^^^^
+
+warning: field `name` is never read
+  --> src/fuzz/mod.rs:93:5
+   |
+91 | struct SyscallDesc {
+   |        ----------- field in this struct
+92 |     nr:       u64,
+93 |     name:     &'static str,
+   |     ^^^^
+
+warning: creating a shared reference to mutable static
+  --> src/drivers/gdt.rs:32:23
+   |
+32 |             let top = DF_STACK.as_ptr().add(DF_STACK.len());
+   |                       ^^^^^^^^^^^^^^^^^ shared reference to mutable static
+   |
+   = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
+   = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+   = note: `#[warn(static_mut_refs)]` (part of `#[warn(rust_2024_compatibility)]`) on by default
+
+warning: creating a shared reference to mutable static
+  --> src/drivers/gdt.rs:32:45
+   |
+32 |             let top = DF_STACK.as_ptr().add(DF_STACK.len());
+   |                                             ^^^^^^^^^^^^^^ shared reference to mutable static
+   |
+   = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
+   = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+
+error: Undefined temporary symbol .Ltmp0
+
+warning: `nexus-kernel` (bin "nexus-kernel") generated 80 warnings
+error: could not compile `nexus-kernel` (bin "nexus-kernel") due to 1 previous error; 80 warnings emitted

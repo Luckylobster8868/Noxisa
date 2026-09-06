@@ -1,0 +1,32 @@
+# Bootloader — UEFI application, no_std, no workspace membership.
+# Build: cd bootloader && cargo +nightly build --release
+# Output: target/x86_64-unknown-uefi/release/bootloader.efi
+
+[package]
+name        = "nexus-bootloader"
+version     = "0.1.0"
+edition     = "2021"
+
+[[bin]]
+name = "nexus-bootloader"
+path = "src/main.rs"
+
+[dependencies]
+# Safe UEFI bindings — handles all UEFI protocol abstractions
+uefi        = { version = "0.26", features = ["alloc"] }
+uefi-services = "0.23"
+
+# Memory page management in UEFI context
+x86_64      = "0.14"
+
+# Logging to UEFI console + serial
+log         = "0.4"
+
+[profile.release]
+opt-level     = "s"    # size-optimised — EFI partition space is limited
+lto           = true
+codegen-units = 1
+panic         = "abort"
+
+[profile.dev]
+panic = "abort"

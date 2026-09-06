@@ -1,0 +1,19 @@
+[package]
+name        = "config_engine"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+
+[lib]
+name = "config_engine"
+path = "src/lib.rs"
+
+[dependencies]
+mlua.workspace       = true
+anyhow.workspace     = true
+log.workspace        = true
+env_logger.workspace = true
+parking_lot.workspace = true
+dirs.workspace       = true
+serde.workspace      = true
+serde_json.workspace = true

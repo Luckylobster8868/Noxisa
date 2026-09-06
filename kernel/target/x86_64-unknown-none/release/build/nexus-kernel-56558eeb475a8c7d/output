@@ -1,0 +1,4 @@
+cargo:rerun-if-changed=src/linker.ld
+cargo:rerun-if-changed=../boot/boot.asm
+cargo:rustc-link-arg=-Tsrc/linker.ld
+cargo:rustc-link-arg=../boot/boot.o
